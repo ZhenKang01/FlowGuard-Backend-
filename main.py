@@ -71,14 +71,57 @@ async def predict_leak(request: Request):
     x = matmul(weights['output_layer.weight'], x, weights['output_layer.bias'])
     probability = sigmoid(x[0])
     
-    is_leak_detected = probability > 0.5
+    # 2. Roboflow Image Inference (Optional)
+    import os
+    import httpx
+    
+    image = form.get("image")
+    roboflow_leak = False
+    roboflow_confidence = None
+    roboflow_message = "No image provided."
+
+    if image and hasattr(image, 'filename') and image.filename:
+        rf_api_key = os.getenv("ROBOFLOW_API_KEY")
+        rf_endpoint = os.getenv("ROBOFLOW_MODEL_ENDPOINT") # e.g. "my-project/1"
+
+        if not rf_api_key or not rf_endpoint:
+            roboflow_message = "Roboflow API Key or Endpoint not configured in Vercel environment variables."
+        else:
+            try:
+                image_bytes = await image.read()
+                url = f"https://detect.roboflow.com/{rf_endpoint}?api_key={rf_api_key}"
+                resp = httpx.post(
+                    url,
+                    files={"file": (image.filename or "upload.jpg", image_bytes, "application/octet-stream")},
+                    timeout=30.0,
+                    verify=False,
+                )
+                
+                if resp.status_code == 200:
+                    rf_data = resp.json()
+                    predictions = rf_data.get("predictions", [])
+                    # Look for "leak" class
+                    leak_preds = [p for p in predictions if p.get("class", "").lower() == "leak"]
+                    if leak_preds:
+                        roboflow_leak = True
+                        roboflow_confidence = max(p.get("confidence", 0) for p in leak_preds)
+                        roboflow_message = f"Leak detected in image (Confidence: {roboflow_confidence:.2f})"
+                    else:
+                        roboflow_message = "No leak detected in image."
+                else:
+                    roboflow_message = f"Roboflow API error: {resp.status_code} - {resp.text}"
+            except Exception as e:
+                roboflow_message = f"Failed to call Roboflow: {str(e)}"
+
+    # 3. Combine Results
+    is_leak_detected = probability > 0.5 or roboflow_leak
         
     return {
         "leak_probability": round(probability, 4),
         "is_leak_detected": is_leak_detected,
-        "pytorch_detected": is_leak_detected,
-        "roboflow_detected": False,
-        "roboflow_message": "Image model stripped for Vercel deployment.",
+        "pytorch_detected": probability > 0.5,
+        "roboflow_detected": roboflow_leak,
+        "roboflow_message": roboflow_message,
         "safety_protocol": "Acknowledge & Dispatch required." if is_leak_detected else "Normal."
     }
 
