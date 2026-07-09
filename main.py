@@ -38,21 +38,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 3. Define the expected JSON payload from the frontend
-class SensorData(BaseModel):
-    hour: int
-    flow_rate: float
+# 3. Create the prediction endpoint
+from fastapi import Request
 
-# 4. Create the prediction endpoint
 @app.post("/predict")
-def predict_leak(data: SensorData):
+async def predict_leak(request: Request):
+    form = await request.form()
+    
+    hour_str = form.get("hour")
+    flow_rate_str = form.get("flow_rate")
+    
+    if not hour_str or not flow_rate_str:
+        return {"error": "Missing hour or flow_rate"}
+        
+    hour = int(hour_str)
+    flow_rate = float(flow_rate_str)
+
     if not weights:
         return {"error": "Weights not found."}
 
-    scaled_flow = data.flow_rate / 150.0 
+    scaled_flow = flow_rate / 150.0 
     
     # Forward pass in pure Python
-    x = [float(data.hour), scaled_flow]
+    x = [float(hour), scaled_flow]
     
     x = matmul(weights['layer1.weight'], x, weights['layer1.bias'])
     x = relu(x)
@@ -62,11 +70,16 @@ def predict_leak(data: SensorData):
     
     x = matmul(weights['output_layer.weight'], x, weights['output_layer.bias'])
     probability = sigmoid(x[0])
+    
+    is_leak_detected = probability > 0.5
         
     return {
         "leak_probability": round(probability, 4),
-        "is_leak_detected": probability > 0.5,
-        "safety_protocol": "Acknowledge & Dispatch required." if probability > 0.5 else "Normal."
+        "is_leak_detected": is_leak_detected,
+        "pytorch_detected": is_leak_detected,
+        "roboflow_detected": False,
+        "roboflow_message": "Image model stripped for Vercel deployment.",
+        "safety_protocol": "Acknowledge & Dispatch required." if is_leak_detected else "Normal."
     }
 
 if __name__ == "__main__":
