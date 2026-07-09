@@ -1,2 +1,0 @@
-[tool.vercel]
-entrypoint = "step6_api:app"
